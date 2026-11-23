@@ -123,7 +123,8 @@ fun main() {
     System.setProperty("apple.laf.useScreenMenuBar", "true")
     // Windows: drawn through ANGLE (bundled beside skiko), not Direct3D's own, whose resizing shook (2026-11-09). Where
     // ANGLE won't load skiko falls back by itself; -Dskiko.renderApi still chooses
-    if (Home.windows && System.getProperty("skiko.renderApi") == null) System.setProperty("skiko.renderApi", "ANGLE")
+    if (Home.windows && System.getProperty("os.arch").lowercase() !in setOf("aarch64", "arm64") &&
+        System.getProperty("skiko.renderApi") == null) System.setProperty("skiko.renderApi", "ANGLE")
     // Apple's catalog (moving covers) wants an Origin header, which the JVM drops unless allowed before any request
     System.setProperty("sun.net.http.allowRestrictedHeaders", "true")
     linuxWindow()
