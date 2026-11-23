@@ -1,0 +1,91 @@
+name: Windows portable (experimental)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/windows-portable
+    paths:
+      - ".github/workflows/windows-portable.yml"
+      - "desktop/**"
+      - "core/**"
+      - "youtube/**"
+      - "gradle/**"
+      - "*.gradle.kts"
+      - "app/build.gradle.kts"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Download libmpv (Windows x64)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $release = Invoke-RestMethod 'https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest'
+          $asset = $release.assets | Where-Object { $_.name -match '^mpv-dev-x86_64-\d{8}.*\.7z$' } | Select-Object -First 1
+          if (-not $asset) { throw 'Could not locate a matching mpv-dev x86_64 archive' }
+          New-Item -ItemType Directory -Force 'desktop/native/windows-x64', 'build/mpv' | Out-Null
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile 'build/mpv/mpv.7z'
+          & 'C:\Program Files\7-Zip\7z.exe' x 'build/mpv/mpv.7z' '-obuild/mpv/extracted' -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to extract mpv archive' }
+          $dll = Get-ChildItem 'build/mpv/extracted' -Filter 'libmpv-2.dll' -Recurse -File | Select-Object -First 1
+          if (-not $dll) { throw 'libmpv-2.dll missing from downloaded archive' }
+          Copy-Item $dll.FullName 'desktop/native/windows-x64/libmpv-2.dll'
+
+      - name: Build Windows application image
+        shell: pwsh
+        run: |
+          ./gradlew.bat :desktop:createDistributable -PdesktopOnly --no-daemon --stacktrace
+          if ($LASTEXITCODE -ne 0) { throw 'Gradle createDistributable failed' }
+
+      - name: Verify and ZIP application
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = 'desktop/build/compose/binaries/main/app/ink music'
+          if (!(Test-Path "$app/ink music.exe")) { throw 'Application EXE missing' }
+          if (!(Test-Path "$app/runtime")) { throw 'Bundled Java runtime missing' }
+          $dll = Get-ChildItem $app -Filter 'libmpv-2.dll' -Recurse -File | Select-Object -First 1
+          if (-not $dll) { throw 'libmpv-2.dll missing from application image' }
+          New-Item -ItemType Directory -Force 'build/portable' | Out-Null
+          Copy-Item $app 'build/portable/INK-Music-Portable' -Recurse
+          @'
+          INK Music Windows portable test build
+          ------------------------------------
+          Open "ink music.exe" to launch. No MSI installation is required.
+          IMPORTANT: This version is INSTALLATION-FREE, not yet fully data-portable:
+          settings and cache may still be written to the Windows user profile.
+          Do not assume USB-stick privacy until data path handling is patched and tested.
+          This is an unofficial fork build of inkappdev/ink-music (GPL-3.0).
+          '@ | Set-Content 'build/portable/INK-Music-Portable/PORTABLE-README.txt'
+          $versionLine = Select-String -Path 'app/build.gradle.kts' -Pattern 'versionName = "([^"]+)"' | Select-Object -First 1
+          $version = if ($versionLine) { $versionLine.Matches[0].Groups[1].Value } else { 'dev' }
+          $zip = "build/INK-Music-$version-Windows-Portable.zip"
+          Compress-Archive -Path 'build/portable/INK-Music-Portable' -DestinationPath $zip -CompressionLevel Optimal
+          "ARCHIVE=$zip" >> $env:GITHUB_ENV
+          Get-FileHash $zip -Algorithm SHA256 | Format-List
+
+      - name: Upload portable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: INK-Music-Windows-Portable
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+          retention-days: 14
