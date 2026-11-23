@@ -409,6 +409,9 @@ object Player {
                     val ours = System.currentTimeMillis() - wentBackAt < 4_000 && s?.id != wentBackTo
                     Log.d("couldn't play ${s?.let { "${it.id} (${if (it.tube) "youtube" else if (it.server) "server" else "file"})" } ?: "a song"}: ${m.errorText(e.error)}" +
                         if (ours) " (cut short going back)" else "")
+                    // Diagnose a server stream independently of mpv: the JVM may reach
+                    // Navidrome while mpv cannot. No secret-bearing URL is logged.
+                    if (!ours && s?.server == true) Server.diagnoseStream(s, m.errorText(e.error))
                     if (!ours && s != null && s.tube && !casting && YouTube.playedBadly(s.id)) scope.launch {
                         // back to it once mpv's moved on (or stopped at the queue's end), if it's still the queue's
                         kotlinx.coroutines.delay(300)
