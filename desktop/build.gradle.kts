@@ -73,7 +73,11 @@ dependencies {
     // Windows: ANGLE (libEGL, libGLESv2), what skiko draws through there (Main.kt sets skiko.renderApi): Direct3D's
     // own stretched the last frame to a window being resized, and it shook (2026-11-09). Its version is skiko's own,
     // which Compose brings (skiko-awt-runtime-windows-x64 in the app): move it with Compose's
-    if (System.getProperty("os.name").startsWith("Windows")) runtimeOnly("org.jetbrains.skiko:skiko-awt-runtime-angle-windows-x64:0.150.2")
+    // ANGLE's bundled binaries are x64-only. Do not package or try to load them on
+    // native Windows ARM64; Skiko uses its own supported Windows renderer instead.
+    val windowsArm = System.getProperty("os.arch").lowercase() in setOf("aarch64", "arm64")
+    if (System.getProperty("os.name").startsWith("Windows") && !windowsArm)
+        runtimeOnly("org.jetbrains.skiko:skiko-awt-runtime-angle-windows-x64:0.150.2")
 }
 
 compose.desktop {
@@ -172,7 +176,8 @@ tasks.withType<AbstractJPackageTask>().configureEach {
 // Windows: ANGLE's two libraries beside skiko's own in the finished app. Compose's app sets skiko.library.path to its
 // app folder, and skiko then looks for them only there: it lays out its own library, never ANGLE's, so without these
 // ANGLE "failed to load" and skiko fell back to Direct3D (2026-11-09). The msi is made from this folder, so it has them
-val windowsAngle = System.getProperty("os.name").startsWith("Windows")
+val windowsAngle = System.getProperty("os.name").startsWith("Windows") &&
+    System.getProperty("os.arch").lowercase() !in setOf("aarch64", "arm64")
 val copyAngle by tasks.registering(Copy::class) {
     enabled = windowsAngle
     val jars = configurations.named("runtimeClasspath").map { c -> c.filter { it.name.startsWith("skiko-awt-runtime-angle-windows-x64") } }
