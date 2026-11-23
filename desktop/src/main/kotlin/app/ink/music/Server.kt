@@ -186,6 +186,50 @@ object Server {
         if (mp3) url(it, "stream", "id" to s.id.removePrefix("n"), "format" to "mp3", "maxBitRate" to 320) else url(it, "stream", "id" to s.id.removePrefix("n"))
     }
 
+    // The native mpv HTTP client can fail even when the JVM Subsonic API works. On a
+    // failed server track, probe only the response headers of that exact stream URL.
+    // Never record the URL, authentication token, user name, response body or exception message.
+    // Rate limiting avoids hammering the server when mpv skips several tracks quickly.
+    private var lastStreamDiagnosticAt = 0L
+
+    @Synchronized private fun mayDiagnoseStream(): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - lastStreamDiagnosticAt < 15_000) return false
+        lastStreamDiagnosticAt = now
+        return true
+    }
+
+    fun diagnoseStream(s: Song, mpvError: String) {
+        if (!s.server || !mayDiagnoseStream()) return
+        scope.launch {
+            val response = try {
+                val streamUrl = stream(s)
+                if (streamUrl == null) "no signed-in server account"
+                else {
+                    val c = URL(streamUrl).openConnection() as HttpURLConnection
+                    c.requestMethod = "GET"
+                    c.instanceFollowRedirects = false
+                    c.connectTimeout = 8_000
+                    c.readTimeout = 8_000
+                    c.setRequestProperty("Range", "bytes=0-0")
+                    c.setRequestProperty("User-Agent", AGENT)
+                    try {
+                        val code = c.responseCode
+                        val type = c.contentType?.substringBefore(';') ?: "unknown"
+                        "HTTP $code, content-type=$type"
+                    } finally { c.disconnect() }
+                }
+            } catch (e: Exception) {
+                // Exceptions can contain token-bearing URLs: log only the exception class.
+                "request failed: ${e.javaClass.simpleName}"
+            }
+            val safeError = mpvError.replace(Regex("[\\r\\n]"), " ").take(120)
+            val entry = "${java.time.OffsetDateTime.now()} | Navidrome track " +
+                "(${s.format}, ${s.bits}-bit, ${s.rate} Hz) | mpv=$safeError | probe=$response\\n"
+            runCatching { File(Home.dir, "stream-diagnostics.log").appendText(entry) }
+        }
+    }
+
     /** A record's cover from the server, at about `px` a side, as the server sends it (a JPEG, a PNG); null if there's none. */
     /**
      * A record's cover at about `px`. A few at a time: Navidrome turns away covers asked for all at once ("429 Too
