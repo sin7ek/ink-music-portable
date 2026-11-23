@@ -86,7 +86,13 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $app = 'desktop/build/compose/binaries/main/app/ink music'
           if (!(Test-Path "$app/ink music.exe")) { throw 'App launcher missing' }
-          if (!(Test-Path "$app/runtime/bin/java.exe")) { throw 'Bundled Java runtime missing' }
+          # jpackage's trimmed runtime can omit java.exe; the JVM runtime DLL is the
+          # actual requirement. Inspect the layout to make failures actionable.
+          Write-Host 'Application image files:'
+          Get-ChildItem $app -Depth 2 | Select-Object -ExpandProperty FullName | Select-Object -First 120 | Out-Host
+          if (!(Test-Path "$app/runtime")) { throw 'Bundled Java runtime directory missing' }
+          $jvm = Get-ChildItem "$app/runtime" -Filter 'jvm.dll' -File -Recurse | Select-Object -First 1
+          if (!$jvm) { throw 'Bundled Java runtime is missing jvm.dll' }
           function AssertArm64([string] $path) {
             $bytes = [IO.File]::ReadAllBytes((Resolve-Path $path).Path)
             $offset = [BitConverter]::ToInt32($bytes, 0x3c)
@@ -94,7 +100,7 @@ jobs:
             if ($machine -ne 0xAA64) { throw ("Not native ARM64: $path (0x{0:X4})" -f $machine) }
           }
           AssertArm64 "$app/ink music.exe"
-          AssertArm64 "$app/runtime/bin/java.exe"
+          AssertArm64 $jvm.FullName
           $mpv = Get-ChildItem $app -Filter 'libmpv-2.dll' -File -Recurse | Select-Object -First 1
           if (!$mpv) { throw 'ARM64 libmpv was not bundled in the Compose application image' }
           AssertArm64 $mpv.FullName
